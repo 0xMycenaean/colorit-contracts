@@ -1,4 +1,3 @@
-// use dojo_examples::models::{Direction};
 use starknet::ContractAddress;
 use core::never;
 use colorit::models::cell::{Cell, Vec2, Color};
@@ -64,18 +63,8 @@ mod actions {
                 )
             );
 
-            let eth_dispatcher = IERC20Dispatcher {
-                contract_address: 0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7 // ETH Contract Address
-                    .try_into()
-                    .unwrap()
-            };
-            eth_dispatcher.approve(randomness_contract_address, callback_fee_limit.into());
-            0x016766cd06717538709192a4dd28b21af7a991a17fea59601e1c00b9081863af
-
             let seed: u128 = 0xbdf7033ef9d6aed4c000bf6862a;
             
-            // let field_color: ByteArray = to_base4(seed);
-
             // set Pieces
             let mut i: usize = 1;
             let width_plus_one = WIDTH + 1;
@@ -108,7 +97,6 @@ mod actions {
             self: @ContractState, game_id: u32, position: Vec2, old_color: Color, new_color: Color,
         ) -> () {
             let world = self.world_dispatcher.read();
-
             let (x, y) = (position.x, position.y);
             let mut current_cell: Cell = get!(world, (game_id, position), (Cell));
             if x == 0 || x > WIDTH || y == 0 || y > HEIGHT || current_cell.color != old_color {
