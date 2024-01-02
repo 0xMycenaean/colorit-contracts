@@ -1,12 +1,13 @@
-use dojo_examples::models::{Position, Direction};
+use colorit::models::cell::Color;
 
-fn next_position(mut position: Position, direction: Direction) -> Position {
-    match direction {
-        Direction::None => { return position; },
-        Direction::Left => { position.vec.x -= 1; },
-        Direction::Right => { position.vec.x += 1; },
-        Direction::Up => { position.vec.y -= 1; },
-        Direction::Down => { position.vec.y += 1; },
+fn value_to_color(val: felt252) -> Color {
+    return match val {
+        0 => Color::Red,
+        1 => Color::Blue,
+        2 => Color::Green,
+        3 => Color::Yellow,
+        4 => Color::Purple,
+        _ => Color::None
     };
-    position
 }
+

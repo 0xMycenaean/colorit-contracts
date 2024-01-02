@@ -1,151 +1,230 @@
-use dojo_examples::models::{Direction};
+// use dojo_examples::models::{Direction};
+use starknet::ContractAddress;
+use core::never;
+use colorit::models::cell::{Cell, Vec2, Color};
 
 // define the interface
 #[starknet::interface]
-trait IActions<TContractState> {
-    fn spawn(self: @TContractState);
-    fn move(self: @TContractState, direction: Direction);
+trait IActions<ContractState> {
+    fn color_it(self: @ContractState, color_to: Color, game_id: u32);
+    fn spawn(
+        self: @ContractState, top_address: ContractAddress, bottom_address: ContractAddress
+    ) -> u32;
+    fn color_cell(
+        self: @ContractState, game_id: u32, position: Vec2, old_color: Color, new_color: Color
+    ) -> ();
 }
 
 // dojo decorator
 #[dojo::contract]
 mod actions {
-    use starknet::{ContractAddress, get_caller_address};
-    use dojo_examples::models::{Position, Moves, Direction, Vec2};
-    use dojo_examples::utils::next_position;
     use super::IActions;
-
-    // declaring custom event struct
-    #[event]
-    #[derive(Drop, starknet::Event)]
-    enum Event {
-        Moved: Moved,
-    }
-
-    // declaring custom event struct
-    #[derive(Drop, starknet::Event)]
-    struct Moved {
-        player: ContractAddress,
-        direction: Direction
-    }
+    use core::option::OptionTrait;
+    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
+    use starknet::info::{get_block_number, get_contract_address};
+    use pragma_lib::abi::{IRandomnessDispatcher, IRandomnessDispatcherTrait};
+    use array::{ArrayTrait, SpanTrait};
+    use openzeppelin::token::erc20::{interface::{IERC20Dispatcher, IERC20DispatcherTrait}};
+    use traits::{TryInto, Into};
+    use colorit::utils::{value_to_color};
+    use colorit::models::game::{WIDTH, HEIGHT, GameTurn, Game, GameTurnImpl};
+    use colorit::models::cell::{Cell, Vec2, Color};
+    use colorit::models::player::{Player, StartingPosition};
 
     // impl: implement functions specified in trait
     #[external(v0)]
     impl ActionsImpl of IActions<ContractState> {
-        // ContractState is defined by system decorator expansion
-        fn spawn(self: @ContractState) {
-            // Access the world dispatcher for reading.
+        fn spawn(
+            self: @ContractState, top_address: ContractAddress, bottom_address: ContractAddress
+        ) -> u32 {
             let world = self.world_dispatcher.read();
+            let game_id = world.uuid();
 
-            // Get the address of the current caller, possibly the player's address.
-            let player = get_caller_address();
-
-            // Retrieve the player's current position from the world.
-            let position = get!(world, player, (Position));
-
-            // Retrieve the player's move data, e.g., how many moves they have left.
-            let moves = get!(world, player, (Moves));
-
-            // Update the world state with the new data.
-            // 1. Set players moves to 10
-            // 2. Move the player's position 100 units in both the x and y direction.
+            // set Players
             set!(
                 world,
                 (
-                    Moves { player, remaining: 100, last_direction: Direction::None },
-                    Position { player, vec: Vec2 { x: 10, y: 10 } },
+                    Player {
+                        game_id, address: top_address, startingPostion: StartingPosition::Top
+                    },
+                    Player {
+                        game_id, address: bottom_address, startingPostion: StartingPosition::Bottom
+                    },
                 )
             );
+
+            // set Game and GameTurn    
+            set!(
+                world,
+                (
+                    Game {
+                        game_id, top: top_address, bottom: bottom_address, winner: Color::None,
+                    },
+                    GameTurn { game_id, player_starting_position: StartingPosition::Top },
+                )
+            );
+
+            let eth_dispatcher = IERC20Dispatcher {
+                contract_address: 0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7 // ETH Contract Address
+                    .try_into()
+                    .unwrap()
+            };
+            eth_dispatcher.approve(randomness_contract_address, callback_fee_limit.into());
+            0x016766cd06717538709192a4dd28b21af7a991a17fea59601e1c00b9081863af
+
+            let seed: u128 = 0xbdf7033ef9d6aed4c000bf6862a;
+            
+            // let field_color: ByteArray = to_base4(seed);
+
+            // set Pieces
+            let mut i: usize = 1;
+            let width_plus_one = WIDTH + 1;
+            let height_plus_one = HEIGHT + 1;
+            loop {
+                if i >= (WIDTH * height_plus_one) {
+                    break;
+                };
+
+                let i_u128: u128 = i.try_into().unwrap();
+                let field_color_felt: felt252 = (seed / (i_u128 + 1) % 5).into();
+
+                let position = Vec2 { x: i % width_plus_one, y: (i / height_plus_one) + 1 };
+
+                let color = value_to_color(field_color_felt);
+                set!(world, (Cell { game_id, color: color, position: position, }));
+
+                i += if (i + 1) % width_plus_one == 0 {
+                    2
+                } else {
+                    1
+                };
+            };
+
+            return game_id;
         }
 
-        // Implementation of the move function for the ContractState struct.
-        fn move(self: @ContractState, direction: Direction) {
-            // Access the world dispatcher for reading.
+        #[abi(embed_v0)]
+        fn color_cell(
+            self: @ContractState, game_id: u32, position: Vec2, old_color: Color, new_color: Color,
+        ) -> () {
             let world = self.world_dispatcher.read();
 
-            // Get the address of the current caller, possibly the player's address.
-            let player = get_caller_address();
+            let (x, y) = (position.x, position.y);
+            let mut current_cell: Cell = get!(world, (game_id, position), (Cell));
+            if x == 0 || x > WIDTH || y == 0 || y > HEIGHT || current_cell.color != old_color {
+                return;
+            }
 
-            // Retrieve the player's current position and moves data from the world.
-            let (mut position, mut moves) = get!(world, player, (Position, Moves));
+            // Change the color
+            current_cell
+                .color =
+                    if current_cell.color == old_color {
+                        new_color
+                    } else {
+                        current_cell.color
+                    };
 
-            // Deduct one from the player's remaining moves.
-            moves.remaining -= 1;
+            set!(world, (current_cell));
 
-            // Update the last direction the player moved in.
-            moves.last_direction = direction;
+            // Recursively apply to neighbors
+            ActionsImpl::color_cell(
+                self, game_id, Vec2 { x: x + 1, y: y }, old_color, new_color
+            ); // Right
+            ActionsImpl::color_cell(
+                self, game_id, Vec2 { x: x - 1, y: y }, old_color, new_color
+            ); // Right
+            ActionsImpl::color_cell(
+                self, game_id, Vec2 { x: x, y: y + 1 }, old_color, new_color
+            ); // Right
+            ActionsImpl::color_cell(
+                self, game_id, Vec2 { x: x, y: y - 1 }, old_color, new_color
+            ); // Right
+        }
 
-            // Calculate the player's next position based on the provided direction.
-            let next = next_position(position, direction);
+        fn color_it(self: @ContractState, color_to: Color, game_id: u32) {
+            let world = self.world_dispatcher.read();
+            let caller = get_caller_address();
+            let mut game_turn: GameTurn = get!(world, game_id, (GameTurn));
 
-            // Update the world state with the new moves data and position.
-            set!(world, (moves, next));
+            let player: Player = get!(world, (game_id, caller), (Player));
 
-            // Emit an event to the world to notify about the player's move.
-            emit!(world, Moved { player, direction });
+            assert(game_turn.player_starting_position == player.startingPostion, 'Not your turn');
+            // let curr_position = player.startingPostion;
+            let staring_vec_p1 = if player.startingPostion == StartingPosition::Top {
+                Vec2 { x: 1, y: 1 }
+            } else {
+                Vec2 { x: WIDTH, y: HEIGHT }
+            };
+            let staring_vec_p2 = if player.startingPostion == StartingPosition::Top {
+                Vec2 { x: WIDTH, y: HEIGHT }
+            } else {
+                Vec2 { x: 1, y: 1 }
+            };
+
+            let mut starting_cell_p1: Cell = get!(world, (game_id, staring_vec_p1), (Cell));
+            let mut starting_cell_p2: Cell = get!(world, (game_id, staring_vec_p2), (Cell));
+
+            assert(color_to != starting_cell_p2.color, 'Oponents color is the same');
+
+            ActionsImpl::color_cell(
+                self, game_id, staring_vec_p1, starting_cell_p1.color, color_to
+            );
+
+            assert(starting_cell_p1.color != starting_cell_p2.color, 'Game Over');
+
+            // change turn
+            game_turn.player_starting_position = game_turn.next_turn();
+            set!(world, (game_turn));
         }
     }
 }
 
+
 #[cfg(test)]
 mod tests {
-    use starknet::class_hash::Felt252TryIntoClassHash;
-
-    // import world dispatcher
+    use colorit::models::cell::{Cell, Vec2, cell};
+    use colorit::actions::{actions, IActionsDispatcher, IActionsDispatcherTrait};
+    use colorit::models::player::{Color, player};
+    use colorit::models::game::{Game, GameTurn, game, game_turn};
     use dojo::world::{IWorldDispatcher, IWorldDispatcherTrait};
+    use dojo::test_utils::{spawn_test_world, deploy_contract, get_caller_address};
 
-    // import test utils
-    use dojo::test_utils::{spawn_test_world, deploy_contract};
-
-    // import models
-    use dojo_examples::models::{position, moves};
-    use dojo_examples::models::{Position, Moves, Direction, Vec2};
-
-    // import actions
-    use super::{actions, IActionsDispatcher, IActionsDispatcherTrait};
-
-    #[test]
-    #[available_gas(30000000)]
-    fn test_move() {
-        // caller
-        let caller = starknet::contract_address_const::<0x0>();
-
+    fn setup_world() -> (IWorldDispatcher, IActionsDispatcher) {
         // models
-        let mut models = array![position::TEST_CLASS_HASH, moves::TEST_CLASS_HASH];
-
+        let mut models = array![
+            game::TEST_CLASS_HASH,
+            player::TEST_CLASS_HASH,
+            game_turn::TEST_CLASS_HASH,
+            cell::TEST_CLASS_HASH
+        ];
         // deploy world with models
         let world = spawn_test_world(models);
 
-        // deploy systems contract
         let contract_address = world
             .deploy_contract('salt', actions::TEST_CLASS_HASH.try_into().unwrap());
         let actions_system = IActionsDispatcher { contract_address };
 
-        // call spawn()
-        actions_system.spawn();
+        (world, actions_system)
+    }
 
-        // call move with direction right
-        actions_system.move(Direction::Right);
+    #[test]
+    #[available_gas(3000000000000000)]
+    fn integration() {
+        let white = get_caller_address();
+        let black = starknet::contract_address_const::<0x02>();
 
-        // Check world state
-        let moves = get!(world, caller, Moves);
+        let (world, actions_system) = setup_world();
 
-        // casting right direction
-        let right_dir_felt: felt252 = Direction::Right.into();
+        //system calls
+        let game_id = actions_system.spawn(white, black);
 
-        // check moves
-        assert(moves.remaining == 99, 'moves is wrong');
+        actions_system.color_it(Color::Red, game_id);
+        actions_system.color_it(Color::Blue, game_id);
+        actions_system.color_it(Color::Green, game_id);
 
-        // check last direction
-        assert(moves.last_direction.into() == right_dir_felt, 'last direction is wrong');
+        let wp_curr_pos = Vec2 { x: 1, y: 1 };
+        let one_one = get!(world, (game_id, wp_curr_pos), (Cell));
 
-        // get new_position
-        let new_position = get!(world, caller, Position);
-
-        // check new position x
-        assert(new_position.vec.x == 11, 'position x is wrong');
-
-        // check new position y
-        assert(new_position.vec.y == 10, 'position y is wrong');
+        assert(one_one.color == Color::Green, 'Color is not green');
     }
 }

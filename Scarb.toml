@@ -1,6 +1,11 @@
+[tool.dojo.world]
+name = "colorit"
+description = "Cairo variant of a popular puzzle game Flood Wars (https://play.google.com/store/apps/details?id=com.fva.flood.wars&hl=en_US)"
+icon_uri = "file://assets/icon.png"
+
 [package]
 cairo-version = "2.4.0"
-name = "dojo_examples"
+name = "colorit"
 version = "0.4.0"
 
 [cairo]
@@ -8,6 +13,8 @@ sierra-replace-ids = true
 
 [dependencies]
 dojo = { git = "https://github.com/dojoengine/dojo", version = "0.4.1" }
+openzeppelin = { git = "https://github.com/openzeppelin/cairo-contracts" }
+pragma_lib = { git = "https://github.com/astraly-labs/pragma-lib" }
 
 [[target.dojo]]
 
